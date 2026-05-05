@@ -1,0 +1,120 @@
+# server:
+#   port: 9200
+#   ssl:
+#     key-store: file:/app/cert/certificate.pfx
+#     key-store-password: ${KEYSTORE_PASSWORD}
+#     key-store-type: PKCS12
+#     enabled-protocols: TLSv1.3,TLSv1.2
+#     ciphers: >-
+#       TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+#       TLS_DHE_RSA_WITH_AES_256_GCM_SHA384,
+#       TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384,
+#       TLS_DHE_RSA_WITH_AES_256_CBC_SHA256
+
+spring:
+  application:
+    name: sapiq-replication-service
+    version: ${APP_VERSION:0.0.1}
+    dpt: 912044
+    dntdom: GPB
+    user: test_user
+    host: test_dns
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/db?currentSchema=schema}
+    username: ${DB_USER:user}
+    password: ${DB_PASSWORD:password}
+    driverClassName: org.postgresql.Driver
+    defaultSchema: postgres_metadata
+    hikari:
+      maximum-pool-size: 20
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      pool-name: TargetDBPool
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: true
+    properties:
+      hibernate:
+        default_schema: sapiq_metadata
+
+  flyway:
+    schemas: sapiq_metadata
+    enabled: true
+    locations: classpath:db/migration
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/meta_base?currentSchema=schema}
+    user: ${DB_USER:user}
+    password: ${DB_PASSWORD:password}
+
+  tomcat:
+    max-connections: 100 # Максимальное количество соединений
+    accept-count: 100 # Максимальное количество потоков
+    threads:
+      max: 50 # Размер очереди запросов
+
+  config:
+    import: optional:vault://
+
+  cloud:
+    vault:
+      uri: http://vault:8200
+      authentication: APPROLE
+      app-role:
+        role-id: ${VAULT_ROLE_ID}
+        secret-id: ${VAULT_SECRET_ID}
+
+      kv:
+        enabled: true
+        backend: secret_v2_t
+        default-context: ord/src/connections
+        application-name: ""
+
+      connection-timeout: 5000
+      read-timeout: 15000
+
+logs-database:
+  enabled: true
+  task-create-partition: 0 0 0 * * ?
+  url: ${DB_LOG_URL:jdbc:postgresql://localhost:5432/bd?currentSchema=schema}
+  username: ${DB_LOG_USER:user}
+  password: ${DB_LOG_PASSWORD:password}
+  driverClassName: org.postgresql.Driver
+  table: "audit.jdata_sapiq_log"
+
+clean-database-logs:
+  # cron expression, to switch off put value '-'
+  task-cleaner-schedule: 0 0 1 * * ?
+  # delete logs from db that older than X years
+  clean-period: 3
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,info
+    endpoint:
+      health:
+        show-details: always
+    metrics:
+      export:
+        prometheus:
+          enabled: true
+
+sources:
+  connections:
+    file-path: ${CONFIG_DIR:classpath:db-connections.json}
+
+logging:
+  cef:
+    path: logs/cef
+    retention-days: 30
+  level:
+    root: INFO
+    org.hibernate.SQL: DEBUG
+    org.hibernate.engine.jdbc.connections.internal.DriverManagerConnectionProviderImpl: DEBUG
+    org.apache.flink: INFO
+    org.springframework.jdbc: WARN
+    com.gpb.replication.sapiq: DEBUG
