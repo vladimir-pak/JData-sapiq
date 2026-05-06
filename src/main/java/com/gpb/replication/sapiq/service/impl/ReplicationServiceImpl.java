@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.gpb.replication.sapiq.dto.ColumnMeta;
+import com.gpb.replication.sapiq.dto.ConstraintDedupKey;
 import com.gpb.replication.sapiq.dto.ConstraintKey;
 import com.gpb.replication.sapiq.dto.ConstraintMeta;
 import com.gpb.replication.sapiq.dto.SourceDbConnections;
@@ -156,7 +157,7 @@ public class ReplicationServiceImpl implements ReplicationService {
              ResultSet rs = stmt.executeQuery()) {
 
             while (rs.next()) {
-                String schemaName = rs.getString("schema_name");
+                String schemaName = trimToNull(rs.getString("schema_name"));
                 long oid = rs.getLong("oid");
                 String fqn = getFqn(List.of(source.getServiceName(), dbName, schemaName));
                 String parentFqn = fqn.substring(0, fqn.lastIndexOf("."));
@@ -199,8 +200,8 @@ public class ReplicationServiceImpl implements ReplicationService {
                     long tableId = rs.getLong("table_id");
 
                     String schemaName = rs.getString("schema_name");
-                    String tableName = rs.getString("table_name");
-                    String tableType = rs.getString("table_type");
+                    String tableName = trimToNull(rs.getString("table_name"));
+                    String tableType = trimToNull(rs.getString("table_type"));
                     String description = rs.getString("description");
                     String viewDefinition = rs.getString("view_definition");
 
@@ -332,8 +333,9 @@ public class ReplicationServiceImpl implements ReplicationService {
             for (String columnName : constraint.columns()) {
                 constraintColumns.add(columnName);
             }
-
-            constraintNode.put("constraintType", constraint.constraintType());
+            
+            String constraintType = trimToNull(constraint.constraintType());
+            constraintNode.put("constraintType", constraintType == null ? "OTHER" : constraintType);
         }
 
         return root;
@@ -356,11 +358,11 @@ public class ReplicationServiceImpl implements ReplicationService {
 
                 ColumnMeta column = new ColumnMeta(
                         rs.getInt("ordinal_position"),
-                        rs.getString("column_name"),
-                        rs.getString("data_type"),
-                        rs.getString("data_type_display"),
+                        trimToNull(rs.getString("column_name")),
+                        trimToNull(rs.getString("data_type")),
+                        trimToNull(rs.getString("data_type_display")),
                         dataLength,
-                        rs.getString("column_constraint"),
+                        trimToNull(rs.getString("column_constraint")),
                         rs.getString("description")
                 );
 
@@ -382,8 +384,9 @@ public class ReplicationServiceImpl implements ReplicationService {
             while (rs.next()) {
                 long tableId = rs.getLong("table_id");
                 long indexId = rs.getLong("index_id");
-                String constraintType = rs.getString("constraint_type");
-                String columnName = rs.getString("column_name");
+
+                String constraintType = trimToNull(rs.getString("constraint_type"));
+                String columnName = trimToNull(rs.getString("column_name"));
 
                 ConstraintKey key = new ConstraintKey(tableId, indexId);
 
@@ -392,21 +395,43 @@ public class ReplicationServiceImpl implements ReplicationService {
                         ignored -> new ConstraintMetaBuilder(tableId, constraintType)
                 );
 
-                builder.columns.add(columnName);
+                if (columnName != null) {
+                    builder.columns.add(columnName);
+                }
             }
+        }
+
+        Map<ConstraintDedupKey, ConstraintMeta> deduplicated = new LinkedHashMap<>();
+
+        for (ConstraintMetaBuilder builder : builders.values()) {
+            String constraintType = trimToNull(builder.constraintType);
+            if (constraintType == null) {
+                constraintType = "OTHER";
+            }
+
+            List<String> columns = builder.columns.stream()
+                    .map(this::trimToNull)
+                    .filter(column -> column != null && !column.isBlank())
+                    .toList();
+
+            ConstraintDedupKey dedupKey = new ConstraintDedupKey(
+                    builder.tableId,
+                    constraintType,
+                    columns
+            );
+
+            deduplicated.putIfAbsent(
+                    dedupKey,
+                    new ConstraintMeta(constraintType, columns)
+            );
         }
 
         Map<Long, List<ConstraintMeta>> constraintsByTableId = new HashMap<>();
 
-        for (ConstraintMetaBuilder builder : builders.values()) {
-            ConstraintMeta constraint = new ConstraintMeta(
-                    builder.constraintType,
-                    List.copyOf(builder.columns)
-            );
-
+        for (Map.Entry<ConstraintDedupKey, ConstraintMeta> entry : deduplicated.entrySet()) {
             constraintsByTableId
-                    .computeIfAbsent(builder.tableId, ignored -> new ArrayList<>())
-                    .add(constraint);
+                    .computeIfAbsent(entry.getKey().tableId(), ignored -> new ArrayList<>())
+                    .add(entry.getValue());
         }
 
         return constraintsByTableId;
@@ -444,5 +469,14 @@ public class ReplicationServiceImpl implements ReplicationService {
             url = url.replaceFirst("/[^/]+$", "/" + dbName);
         }
         return url;
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }
