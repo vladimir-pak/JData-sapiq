@@ -11,15 +11,6 @@ import lombok.Setter;
 public class SqlTemplates {
 
     /*
-     * SAP IQ подключается к конкретной БД.
-     * DB_NAME() без параметра возвращает имя текущей базы.
-     */
-    String databaseSql = """
-            SELECT DB_ID() AS oid, DB_NAME() AS datname
-            FROM iq_dummy;
-            """;
-
-    /*
      * В SAP IQ schema фактически соответствует owner/user.
      * Берём только владельцев, у которых есть пользовательские таблицы/представления.
      */

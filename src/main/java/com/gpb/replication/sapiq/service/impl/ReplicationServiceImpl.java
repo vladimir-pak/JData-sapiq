@@ -76,23 +76,28 @@ public class ReplicationServiceImpl implements ReplicationService {
                     source.getUsername()
             );
 
-            List<String> databases = databaseReplication(source);
+            String dbFqn = String.format("%s.%s", source.getServiceName(), source.getSchema());
+            DatabaseMetadata db = new DatabaseMetadata();
+                db.setId(new EntityId(1L, source.getServiceName()));
+                db.setFqn(dbFqn);
+                db.setServiceName(source.getServiceName());
+                db.setName(source.getSchema());
+                db.setCreatedAt(LocalDateTime.now());
+                db.setHashData(DigestUtils.md5Hex(dbFqn));
 
-            for (String dbName : databases) {
-                try {
-                    schemaReplication(source, dbName);
-                } catch (SQLException e) {
-                    svoiCustomLogger.logDbConnectionError(
-                            source.getHostFromUrl(),
-                            source.getPortFromUrl(),
-                            source.getDbType(),
-                            source.getUsername(),
-                            e
-                    );
-                    continue;
-                }
-                
-                tableReplication(source, dbName);
+            databaseRep.save(db);
+
+            try {
+                schemaReplication(source, source.getSchema());
+                tableReplication(source, source.getSchema());
+            } catch (SQLException e) {
+                svoiCustomLogger.logDbConnectionError(
+                        source.getHostFromUrl(),
+                        source.getPortFromUrl(),
+                        source.getDbType(),
+                        source.getUsername(),
+                        e
+                );
             }
 
             log.info("Репликация завершена успешно для источника {}", serviceName);
@@ -103,9 +108,8 @@ public class ReplicationServiceImpl implements ReplicationService {
                             serviceName),
                     SvoiSeverityEnum.ONE
             );
-            log.info("Всего реплицировано {} баз данных из источника {}", databases.size(), serviceName);
 
-        } catch (SQLException e) {
+        } catch (Exception e) {
             svoiCustomLogger.logDbConnectionError(
                     source.getHostFromUrl(),
                     source.getPortFromUrl(),
@@ -131,44 +135,6 @@ public class ReplicationServiceImpl implements ReplicationService {
         schemaRep.deleteByServiceName(serviceName);
         tableRep.deleteByServiceName(serviceName);
         log.info("Truncated metadata tables for service={}", serviceName);
-    }
-
-    private List<String> databaseReplication(SourceDbConnections source) throws SQLException {
-        List<String> databases = new ArrayList<>();
-        LocalDateTime currentTime = LocalDateTime.now();
-
-        try (Connection conn = DriverManager.getConnection(source.getUrl(), source.getUsername(), source.getPassword());
-             PreparedStatement stmt = conn.prepareStatement(sql.getDatabaseSql());
-             ResultSet rs = stmt.executeQuery()) {
-
-            List<DatabaseMetadata> entities = new ArrayList<>();
-
-            while (rs.next()) {
-                String dbName = rs.getString("datname");
-                long oid = rs.getLong("oid");
-                String fqn = getFqn(List.of(source.getServiceName(), dbName));
-
-                DatabaseMetadata db = new DatabaseMetadata();
-                db.setId(new EntityId(oid, source.getServiceName()));
-                db.setFqn(fqn);
-                db.setServiceName(source.getServiceName());
-                db.setName(dbName);
-                db.setCreatedAt(currentTime);
-                db.setHashData(DigestUtils.md5Hex(fqn));
-
-
-                entities.add(db);
-                databases.add(dbName);
-            }
-            databaseRep.saveAll(entities);
-            log.info("Реплицировано {} DB SapIQ для {}", databases.size(), source.getServiceName());
-
-        } catch (SQLException e) {
-            log.error("Ошибка при подключении и получении DB из SapIQ для {}: {}", 
-                    source.getName(), e.getMessage(), e);
-            throw e;
-        }
-        return databases;
     }
 
     private void schemaReplication(SourceDbConnections source, String dbName) throws SQLException {
