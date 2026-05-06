@@ -159,14 +159,20 @@ public class ReplicationServiceImpl implements ReplicationService {
             while (rs.next()) {
                 String schemaName = trimToNull(rs.getString("schema_name"));
                 long oid = rs.getLong("oid");
-                String fqn = getFqn(List.of(source.getServiceName(), dbName, schemaName));
+
+                if (schemaName == null) {
+                    log.warn("Пропущена схема с пустым schema_name, oid={}", oid);
+                    continue;
+                }
+
+                String fqn = getFqn(source.getServiceName(), dbName, schemaName);
                 String parentFqn = fqn.substring(0, fqn.lastIndexOf("."));
 
                 SchemaMetadata schema = new SchemaMetadata();
                 schema.setId(new EntityId(oid, parentFqn));
                 schema.setFqn(fqn);
                 schema.setDbName(dbName);
-                schema.setName(rs.getString("schema_name"));
+                schema.setName(schemaName);
                 schema.setServiceName(source.getServiceName());
                 schema.setCreatedAt(currentTime);
                 schema.setHashData(DigestUtils.md5Hex(fqn));
@@ -199,18 +205,24 @@ public class ReplicationServiceImpl implements ReplicationService {
                 while (rs.next()) {
                     long tableId = rs.getLong("table_id");
 
-                    String schemaName = rs.getString("schema_name");
+                    String schemaName = trimToNull(rs.getString("schema_name"));
                     String tableName = trimToNull(rs.getString("table_name"));
+                    if (schemaName == null || tableName == null) {
+                        log.warn("Пропущена таблица с пустым schema/table name: table_id={}, schema={}, table={}",
+                                tableId, schemaName, tableName);
+                        continue;
+                    }
+
                     String tableType = trimToNull(rs.getString("table_type"));
                     String description = rs.getString("description");
                     String viewDefinition = rs.getString("view_definition");
 
-                    String fqn = getFqn(List.of(
+                    String fqn = getFqn(
                             source.getServiceName(),
                             dbName,
                             schemaName,
                             tableName
-                    ));
+                    );
 
                     String parentFqn = fqn.substring(0, fqn.lastIndexOf("."));
                     EntityId id = new EntityId(rs.getLong("oid"), parentFqn);
@@ -277,7 +289,8 @@ public class ReplicationServiceImpl implements ReplicationService {
     ) {
         ObjectNode root = objectMapper.createObjectNode();
 
-        root.put("tableType", tableType);
+        String normalizedTableType = trimToNull(tableType);
+        root.put("tableType", normalizedTableType == null ? "OTHER" : normalizedTableType);
 
         if (viewDefinition == null || viewDefinition.isBlank()) {
             root.putNull("viewDefinition");
@@ -287,21 +300,26 @@ public class ReplicationServiceImpl implements ReplicationService {
 
         ArrayNode columnsArray = root.putArray("columns");
 
+        String normalizedSchemaName = requireMetadataValue(schemaName, "schemaName", tableName);
+        String normalizedTableName = requireMetadataValue(tableName, "tableName", schemaName);
+
         for (ColumnMeta column : columns) {
             ObjectNode columnNode = columnsArray.addObject();
 
             columnNode.put("ordinalPosition", column.ordinalPosition());
+            
+            String normalizedColumnName = requireMetadataValue(column.name(), "columnName", schemaName + "." + tableName);
 
-            String columnFqn = getFqn(List.of(
+            String columnFqn = getFqn(
                     source.getServiceName(),
                     dbName,
-                    schemaName,
-                    tableName,
-                    column.name()
-            ));
+                    normalizedSchemaName,
+                    normalizedTableName,
+                    normalizedColumnName
+            );
 
             columnNode.put("fqn", columnFqn);
-            columnNode.put("name", column.name());
+            columnNode.put("name", normalizedColumnName);
             columnNode.put("dataType", column.dataType());
             columnNode.put("dataTypeDisplay", column.dataTypeDisplay());
 
@@ -331,7 +349,10 @@ public class ReplicationServiceImpl implements ReplicationService {
 
             ArrayNode constraintColumns = constraintNode.putArray("columns");
             for (String columnName : constraint.columns()) {
-                constraintColumns.add(columnName);
+                String normalizedColumnName = trimToNull(columnName);
+                if (normalizedColumnName != null) {
+                    constraintColumns.add(normalizedColumnName);
+                }
             }
             
             String constraintType = trimToNull(constraint.constraintType());
@@ -356,9 +377,17 @@ public class ReplicationServiceImpl implements ReplicationService {
                     dataLength = rawLength;
                 }
 
+                String columnName = trimToNull(rs.getString("column_name"));
+
+                if (columnName == null) {
+                    log.warn("Пропущена колонка с пустым column_name: table_id={}, ordinal_position={}",
+                            tableId, rs.getInt("ordinal_position"));
+                    continue;
+                }
+
                 ColumnMeta column = new ColumnMeta(
                         rs.getInt("ordinal_position"),
-                        trimToNull(rs.getString("column_name")),
+                        columnName,
                         trimToNull(rs.getString("data_type")),
                         trimToNull(rs.getString("data_type_display")),
                         dataLength,
@@ -456,8 +485,18 @@ public class ReplicationServiceImpl implements ReplicationService {
         }
     }
 
-    private String getFqn(List<String> names) {
-        return String.join(".", names);
+    private String getFqn(String... names) {
+        List<String> parts = new ArrayList<>();
+
+        for (String name : names) {
+            String normalized = trimToNull(name);
+            if (normalized == null) {
+                throw new IllegalArgumentException("FQN contains null/blank part");
+            }
+            parts.add(normalized);
+        }
+
+        return String.join(".", parts);
     }
 
     private String buildDbUrl(String originalUrl, String dbName) {
@@ -478,5 +517,13 @@ public class ReplicationServiceImpl implements ReplicationService {
 
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String requireMetadataValue(String value, String fieldName, String context) {
+        String trimmed = trimToNull(value);
+        if (trimmed == null) {
+            throw new IllegalStateException("Пустое metadata-поле " + fieldName + " для " + context);
+        }
+        return trimmed;
     }
 }
