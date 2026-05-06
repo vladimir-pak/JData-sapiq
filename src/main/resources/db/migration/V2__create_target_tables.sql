@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS sapiq_metadata.table_metadata (
     service_name varchar(100) NOT NULL,
     db_name     varchar(200) NOT NULL,
     schema_name varchar(200) NOT NULL,
-    description  varchar(200) NULL,          -- новое поле (описание)
-    name        varchar(200) NOT NULL,          -- новое поле (имя таблицы)
+    description  varchar(500) NULL,          -- новое поле (описание)
+    name        varchar(400) NOT NULL,          -- новое поле (имя таблицы)
     parent_fqn  varchar(400) NOT NULL,          -- новое поле (FQN схемы)
     data        jsonb NULL,                     -- теперь содержит только список колонок
     hash_data   varchar(500) NULL,
